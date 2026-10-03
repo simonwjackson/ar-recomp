@@ -414,7 +414,112 @@ static void TestSkyboxProjection(void) {
   CHECK(!Diorama_ProjectCapturedBg2Point(&p,228,128,&point,NULL,NULL));
 }
 
+static void TestCaptureMeshEvidence(void) {
+  DioramaProjection projection = Projection();
+  projection.output_x = 120;
+  projection.output_y = 40;
+  projection.texture_x_origin = 10;
+  projection.bg1_plane.capture_offset = (ArRenderPointF){5, 2};
+  projection.bg1_high_plane = projection.bg2_high_plane = projection.bg1_plane;
+  projection.bg2_plane = projection.bg1_plane;
+  /* These are submitted SCREEN vertices. The middle row bows past all four
+   * corners. An aperture constraint can place them anywhere; evidence must
+   * consume them unchanged instead of rebuilding a parallel camera/curve. */
+  const ArRenderVertex2D vertices[] = {
+    {.position={0,0}, .tex_coord={0,0}},
+    {.position={100,0}, .tex_coord={1,0}},
+    {.position={-30,70}, .tex_coord={0,0.5f}},
+    {.position={160,70}, .tex_coord={1,0.5f}},
+    {.position={0,100}, .tex_coord={0,1}},
+    {.position={100,100}, .tex_coord={1,1}},
+  };
+  const int32_t indices[] = {0,1,2, 1,3,2, 2,3,4, 3,5,4};
+  DioramaCaptureEvidence evidence = {0};
+  /* Maps to u=.25..75, v=.25..75, including origin and generated offset. */
+  evidence.source[0] = (DioramaEvidenceBounds){true,10,10.5f,60,35.5f};
+  evidence.source[1] = (DioramaEvidenceBounds){true,-15,-2,10,48};
+  const DioramaBgValidSpanPlan spans = {
+    .count=1, .spans={{.x0=10,.x1=20,.y0=0,.y1=50}}};
+  for (int i=0; i<4; i++) evidence.spans[i] = &spans;
+  const int planes[] = {SR_PPU_OVERLAY_BG1, kDioramaPlane_Bg1Hi,
+                         SR_PPU_OVERLAY_BG2, kDioramaPlane_Bg2Hi};
+  for (int i=0; i<4; i++) {
+    Diorama_CaptureMeshEvidence(&evidence, &projection, planes[i], vertices, 6, indices, 12);
+    CHECK(evidence.mesh[i] && evidence.output[i][0].valid);
+    /* Extrema include intersections with diagonal triangle edges, not just
+     * ROI corners or a continuously reprojected curve. */
+    CHECK(Near(evidence.output[i][0].x0,122.5f));
+    CHECK(Near(evidence.output[i][0].x1,240));
+    CHECK(Near(evidence.output[i][0].y0,75));
+    CHECK(Near(evidence.output[i][0].y1,125));
+    /* Independent barycentric samples of every submitted triangle must fit
+     * the native enclosure, including the bowed interior rows. */
+    for (int triangle=0; triangle<12; triangle+=3)
+      for (int a=0; a<=20; a++)
+        for (int b=0; b<=20-a; b++) {
+          const float weights[] = {a/20.0f,b/20.0f,(20-a-b)/20.0f};
+          float u=0, v=0, x=projection.output_x, y=projection.output_y;
+          for (int corner=0; corner<3; corner++) {
+            const ArRenderVertex2D *vertex=&vertices[indices[triangle+corner]];
+            u+=weights[corner]*vertex->tex_coord.x;
+            v+=weights[corner]*vertex->tex_coord.y;
+            x+=weights[corner]*vertex->position.x;
+            y+=weights[corner]*vertex->position.y;
+          }
+          if (u<0.25f || u>0.75f || v<0.25f || v>0.75f) continue;
+          const DioramaEvidenceBounds bound=evidence.output[i][0];
+          CHECK(x>=bound.x0-0.001f && x<=bound.x1+0.001f);
+          CHECK(y>=bound.y0-0.001f && y<=bound.y1+0.001f);
+        }
+    CHECK(evidence.output[i][1].valid);
+    CHECK(Near(evidence.output[i][1].x0,109.5f));
+    CHECK(Near(evidence.output[i][1].x1,160));
+    CHECK(!evidence.output[i][2].valid);
+  }
+  CHECK(!evidence.failed);
+  DioramaCaptureEvidence sparse = {0};
+  sparse.source[0] = evidence.source[0];
+  Diorama_CaptureMeshEvidence(&sparse,&projection,planes[0],vertices,6,indices,3);
+  CHECK(sparse.output[0][0].valid);
+  CHECK(sparse.output[0][0].y1 < evidence.output[0][0].y1);
+  DioramaCaptureEvidence absent = {0};
+  absent.source[0] = evidence.source[0];
+  projection.bg1_plane.valid = false;
+  Diorama_CaptureMeshEvidence(&absent,&projection,planes[0],vertices,6,indices,12);
+  CHECK(!absent.mesh[0] && !absent.output[0][0].valid);
+  projection.bg1_plane.valid = true;
+  const int32_t bad_indices[] = {0,1,99};
+  Diorama_CaptureMeshEvidence(&absent,&projection,planes[0],vertices,6,bad_indices,3);
+  CHECK(absent.failed);
+}
+
+static void TestCaptureSkyboxEvidence(void) {
+  DioramaProjection projection = Projection();
+  projection.output_x = 20;
+  projection.output_y = 30;
+  projection.bg2_skybox = (DioramaSkyboxProjection){
+    .count=2, .active_band=-1,
+    .bands={{0,0,100,25,0,0.5f}, {25,25,75,50,0.5f,1}},
+  };
+  DioramaCaptureEvidence evidence = {0};
+  evidence.source[0] = (DioramaEvidenceBounds){true,25,10,75,40};
+  evidence.source[1] = (DioramaEvidenceBounds){true,0,0,25,50};
+  Diorama_CaptureSkyboxEvidence(&evidence,&projection);
+  CHECK(evidence.skybox && !evidence.failed);
+  CHECK(Near(evidence.output[2][0].x0,20));
+  CHECK(Near(evidence.output[2][0].x1,120));
+  CHECK(Near(evidence.output[2][0].y0,50));
+  CHECK(Near(evidence.output[2][0].y1,110));
+  CHECK(Near(evidence.output[2][1].y1,80));
+  CHECK(!evidence.output[0][0].valid);
+  projection.bg2_skybox.bands[1].x1 = NAN;
+  Diorama_CaptureSkyboxEvidence(&evidence,&projection);
+  CHECK(evidence.failed);
+}
+
 int main(void) {
+  TestCaptureMeshEvidence();
+  TestCaptureSkyboxEvidence();
   TestSkyboxProjection();
   TestGeneratedPlaneOffset();
   TestTiltedCameraFraming();

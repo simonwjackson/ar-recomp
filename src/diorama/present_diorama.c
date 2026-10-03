@@ -1,5 +1,6 @@
 #include "diorama/present_diorama.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -251,6 +252,44 @@ void PresentDiorama_Upload(ArRenderDevice *device, const FrameSlot *slot) {
   DioramaPerformance_End(frame_analysis);
 }
 
+static DioramaEvidenceBounds EvidenceSource(float x0, float y0, float x1, float y1) {
+  return (DioramaEvidenceBounds){x0 < x1 && y0 < y1, x0, y0, x1, y1};
+}
+
+static void TraceProjection(const FrameSlot *slot,
+    const DioramaProjection *projection, const DioramaCaptureEvidence *evidence,
+    bool heat, ArRenderRectI output_viewport) {
+  static const char *const planes[] = {"bg1", "bg1-high", "bg2", "bg2-high"};
+  static const char *const bands[] = {"native", "left", "right", "top", "bottom"};
+  const DioramaPlaneProjection *shapes[] = {&projection->bg1_plane,
+      &projection->bg1_high_plane, &projection->bg2_plane, &projection->bg2_high_plane};
+  for (int p = 0; p < kDioramaEvidencePlanes; p++)
+    for (int band = 0; band < kDioramaEvidenceBands; band++) {
+      const DioramaEvidenceBounds b = evidence->output[p][band];
+      const DioramaEvidenceBounds s = evidence->source[band];
+      /* Outward integer rounding plus one pixel guards edge/texel rounding.
+       * An AABB is an exclusion enclosure, not a fully populated polygon. */
+      fprintf(stderr,
+          "[viewport-projection] gf=%u map=%02x/%02x plane=%s band=%s "
+          "stage=scene-pre-post coords=xyxy precision=uv-clipped-triangle-aabb "
+          "composite_ok=1 evidence_ok=%d projection_valid=%d plane_valid=%d mesh=%d skybox=%d "
+          "ok=%d source_ok=%d source=%.3f/%.3f/%.3f/%.3f "
+          "bounds=%.0f/%.0f/%.0f/%.0f scene_viewport=%d/%d/%d/%d "
+          "output_viewport=%d/%d/%d/%d heat=%d\n",
+          (unsigned)slot->action_effects.game_frame,
+          (unsigned)slot->diorama_map_group, (unsigned)slot->diorama_map_number,
+          planes[p], bands[band], !evidence->failed, projection->valid, shapes[p]->valid,
+          evidence->mesh[p], p == 2 && evidence->skybox,
+          b.valid && !evidence->failed, s.valid, s.x0, s.y0, s.x1, s.y1,
+          b.valid ? floorf(b.x0) - 1 : 0, b.valid ? floorf(b.y0) - 1 : 0,
+          b.valid ? ceilf(b.x1) + 1 : 0, b.valid ? ceilf(b.y1) + 1 : 0,
+          projection->output_x, projection->output_y,
+          projection->output_width, projection->output_height,
+          output_viewport.x, output_viewport.y, output_viewport.w, output_viewport.h,
+          heat);
+    }
+}
+
 void PresentDiorama_Draw(ArRenderDevice *device, const FrameSlot *slot, float alpha) {
   DioramaPerformanceScope presentation_performance =
       DioramaPerformance_Begin(kDioramaPerformance_Total);
@@ -345,7 +384,7 @@ void PresentDiorama_Draw(ArRenderDevice *device, const FrameSlot *slot, float al
           slot->diorama_plane_request_mask,
           slot->diorama_plane_content_mask,
           s_diorama_uploaded_plane_mask);
-  (void)PresentActionHeat_Begin(device, slot, output_viewport);
+  const bool heat = PresentActionHeat_Begin(device, slot, output_viewport);
   const ArRenderRectI viewport = PresentActionHeat_SceneViewport(output_viewport);
   PresentActionPlaneEffectContext plane_effect = {
     device, slot, viewport,
@@ -353,7 +392,34 @@ void PresentDiorama_Draw(ArRenderDevice *device, const FrameSlot *slot, float al
   ArRenderPointF plane_offsets[kDioramaPlane_Count];
   for (int plane = 0; plane < kDioramaPlane_Count; plane++)
     plane_offsets[plane] = DioramaFrameGeneration_PlaneOffset(plane);
+  DioramaCaptureEvidence evidence;
+  DioramaBgValidSpanPlan bg1_valid_spans;
+  if (slot->trace_viewport_projection) {
+    evidence = (DioramaCaptureEvidence){0};
+    const float nx = slot->ws_extra, ny = slot->ws_extra_top;
+    const float x0 = fmaxf(slot->visible_x0, nx - slot->extra_left_cur);
+    const float x1 = fminf(slot->visible_x0 + slot->visible_width,
+                          nx + kFrameSlotAuthenticWidth + slot->extra_right_cur);
+    const float y0 = fmaxf(0, ny - slot->visible_top);
+    const float y1 = fminf(FrameSlot_CaptureHeight(slot),
+        ny + FrameSlot_VisibleHeight(slot) - slot->visible_top);
+    evidence.source[0] = EvidenceSource(nx, ny,
+        nx + kFrameSlotAuthenticWidth, ny + kFrameSlotAuthenticHeight);
+    evidence.source[1] = EvidenceSource(x0, ny, nx, ny + kFrameSlotAuthenticHeight);
+    evidence.source[2] = EvidenceSource(nx + kFrameSlotAuthenticWidth, ny,
+        x1, ny + kFrameSlotAuthenticHeight);
+    evidence.source[3] = EvidenceSource(x0, y0, x1, ny);
+    evidence.source[4] = EvidenceSource(x0, ny + kFrameSlotAuthenticHeight, x1, y1);
+    DioramaBgValidSpanPlan_Build(
+        slot->ws_extra + slot->obj_apron, slot->extra_left_right,
+        slot->extra_left_cur, slot->extra_right_cur, slot->bg_capture_pad_to_budget,
+        &slot->action_bg_plan.layer[0], slot->ws_extra_top,
+        FrameSlot_CaptureHeight(slot), kFrameSlotLayerTextureWidth, &bg1_valid_spans);
+    evidence.spans[0] = evidence.spans[1] = &bg1_valid_spans;
+    evidence.spans[2] = evidence.spans[3] = &bg2_valid_spans;
+  }
   const DioramaCapture capture = {
+      .evidence = slot->trace_viewport_projection ? &evidence : NULL,
       .plane_capture_offsets = plane_offsets,
       .width = slot->snes_width,
       .height =
@@ -408,11 +474,15 @@ void PresentDiorama_Draw(ArRenderDevice *device, const FrameSlot *slot, float al
         ArRenderDevice_LastError(device));
     return;
   }
+  if (slot->trace_viewport_projection)
+    Diorama_CaptureSkyboxEvidence(&evidence, &action_projection);
   DioramaPerformanceScope callback_performance =
       DioramaPerformance_Begin(kDioramaPerformance_Callback);
   PresentActionEffects_Draw(device, slot, viewport, &action_projection);
   DioramaPerformance_End(callback_performance);
   PresentActionHeat_End(device, slot, output_viewport);
+  if (slot->trace_viewport_projection && !SessionFatal_Requested())
+    TraceProjection(slot, &action_projection, &evidence, heat, output_viewport);
   /* Flat HUD mode leaves BG3 in the same RemoveFromGame capture used by flat
    * presentation. Reconstruct its split pieces into one texture before
    * drawing the screen-space overlay; drawing them directly creates seams

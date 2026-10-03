@@ -11,6 +11,7 @@
 
 #include "render/render_types.h"
 #include "dev/dev_tools_readback.h"
+#include "present/render_comparison.h"
 
 void HostDevTools_FormatInspectorInfo(char *buffer, size_t buffer_size);
 bool HostDevTools_DumpSceneAssets(void);
@@ -24,6 +25,12 @@ void HostDevTools_ArmDioramaDump(void);
 bool HostDevTools_DioramaDumpArmed(void);
 void HostDevTools_ServiceDioramaDump(void);
 DevToolsCaptureResult HostDevTools_WriteFramebufferPpm(FILE *file, bool require_composite);
+/* Successful screenshot callback. Uses the drawn slot and PresentFrame's
+ * returned viewport; HUD rectangles describe chunk layout before CRT warps. */
+struct FrameSlot;
+void HostDevTools_TraceCompositeCapture(
+    const struct FrameSlot *slot, RenderComparisonView comparison,
+    ArRenderRectI final_viewport, int readback_width, int readback_height);
 
 /* The inspector selection the renderer highlights; FrameSlot_Capture copies it
  * into each slot, and closing the inspector clears it. */

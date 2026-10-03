@@ -334,3 +334,153 @@ bool Diorama_ProjectCapturedBg2Point(const DioramaProjection *projection,
       projection, capture_x, capture_y,
       &projection->bg2_plane, point, scale_x, scale_y);
 }
+
+/* Clip in texture space and interpolate the submitted 2D positions. The GPU
+ * consumes these same affine triangles, not a continuously resampled bow. */
+typedef struct EvidenceVertex { float u, v, x, y; } EvidenceVertex;
+
+static void EvidenceInclude(DioramaEvidenceBounds *bounds, float x, float y) {
+  if (!bounds->valid) {
+    *bounds = (DioramaEvidenceBounds){true, x, y, x, y};
+    return;
+  }
+  bounds->x0 = fminf(bounds->x0, x);
+  bounds->x1 = fmaxf(bounds->x1, x);
+  bounds->y0 = fminf(bounds->y0, y);
+  bounds->y1 = fmaxf(bounds->y1, y);
+}
+
+static void EvidenceClipTriangle(
+    const EvidenceVertex triangle[3], float u0, float v0, float u1, float v1,
+    int output_x, int output_y, DioramaEvidenceBounds *bounds) {
+  EvidenceVertex a[12], b[12];
+  for (int i = 0; i < 3; i++) a[i] = triangle[i];
+  int count = 3;
+  const float edges[4] = {u0, v0, u1, v1};
+  for (int edge = 0; edge < 4 && count; edge++) {
+    int next_count = 0;
+    EvidenceVertex previous = a[count - 1];
+    float previous_d = (edge % 2 ? previous.v : previous.u) - edges[edge];
+    if (edge >= 2) previous_d = -previous_d;
+    for (int i = 0; i < count; i++) {
+      const EvidenceVertex current = a[i];
+      float d = (edge % 2 ? current.v : current.u) - edges[edge];
+      if (edge >= 2) d = -d;
+      if ((d >= 0) != (previous_d >= 0)) {
+        const float t = previous_d / (previous_d - d);
+        b[next_count++] = (EvidenceVertex){
+          previous.u + t * (current.u - previous.u),
+          previous.v + t * (current.v - previous.v),
+          previous.x + t * (current.x - previous.x),
+          previous.y + t * (current.y - previous.y)};
+      }
+      if (d >= 0) b[next_count++] = current;
+      previous = current;
+      previous_d = d;
+    }
+    count = next_count;
+    for (int i = 0; i < count; i++) a[i] = b[i];
+  }
+  if (count < 3) return;
+  for (int i = 0; i < count; i++)
+    EvidenceInclude(bounds, output_x + a[i].x, output_y + a[i].y);
+}
+
+void Diorama_CaptureMeshEvidence(
+    DioramaCaptureEvidence *evidence, const DioramaProjection *projection,
+    int plane, const ArRenderVertex2D *vertices, int vertex_count,
+    const int32_t *indices, int index_count) {
+  if (!evidence || !projection || !projection->valid) return;
+  if (projection->texture_width <= 0 || projection->texture_height <= 0 ||
+      vertex_count < 0 || index_count < 0 || index_count % 3 ||
+      (index_count && (!vertices || !indices))) {
+    evidence->failed = true;
+    return;
+  }
+  const DioramaPlaneProjection *shape;
+  int p;
+  switch (plane) {
+    case SR_PPU_OVERLAY_BG1: p = 0; shape = &projection->bg1_plane; break;
+    case kDioramaPlane_Bg1Hi: p = 1; shape = &projection->bg1_high_plane; break;
+    case SR_PPU_OVERLAY_BG2: p = 2; shape = &projection->bg2_plane; break;
+    case kDioramaPlane_Bg2Hi: p = 3; shape = &projection->bg2_high_plane; break;
+    default: return;
+  }
+  if (!shape->valid || !index_count) return;
+  evidence->mesh[p] = true;
+  for (int i = 0; i + 2 < index_count; i += 3) {
+    EvidenceVertex triangle[3];
+    for (int j = 0; j < 3; j++) {
+      const int index = indices[i + j];
+      if (index < 0 || index >= vertex_count) { evidence->failed = true; return; }
+      const ArRenderVertex2D *v = &vertices[index];
+      triangle[j] = (EvidenceVertex){v->tex_coord.x, v->tex_coord.y,
+                                     v->position.x, v->position.y};
+      if (!isfinite(triangle[j].u) || !isfinite(triangle[j].v) ||
+          !isfinite(triangle[j].x) || !isfinite(triangle[j].y)) {
+        evidence->failed = true;
+        return;
+      }
+    }
+    for (int band = 0; band < kDioramaEvidenceBands; band++) {
+      const DioramaEvidenceBounds source = evidence->source[band];
+      if (!source.valid) continue;
+      const DioramaBgValidSpanPlan *spans = band ? evidence->spans[p] : NULL;
+      if (spans && spans->count > kDioramaBgMaxValidSpans) {
+        evidence->failed = true;
+        return;
+      }
+      const unsigned count = spans ? spans->count : 1;
+      for (unsigned span = 0; span < count; span++) {
+        float x0 = source.x0, y0 = source.y0, x1 = source.x1, y1 = source.y1;
+        if (spans) {
+          const DioramaBgValidSpan *s = &spans->spans[span];
+          x0 = fmaxf(x0, s->x0 - projection->texture_x_origin);
+          x1 = fminf(x1, s->x1 - projection->texture_x_origin);
+          y0 = fmaxf(y0, s->y0);
+          y1 = fminf(y1, s->y1);
+        }
+        if (x0 >= x1 || y0 >= y1) continue;
+        EvidenceClipTriangle(triangle,
+            (x0 + projection->texture_x_origin + shape->capture_offset.x) /
+                projection->texture_width,
+            (y0 + shape->capture_offset.y) / projection->texture_height,
+            (x1 + projection->texture_x_origin + shape->capture_offset.x) /
+                projection->texture_width,
+            (y1 + shape->capture_offset.y) / projection->texture_height,
+            projection->output_x, projection->output_y, &evidence->output[p][band]);
+      }
+    }
+  }
+}
+
+void Diorama_CaptureSkyboxEvidence(
+    DioramaCaptureEvidence *evidence, const DioramaProjection *projection) {
+  if (!evidence || !projection || !projection->valid) return;
+  const DioramaSkyboxProjection *sky = &projection->bg2_skybox;
+  for (unsigned i = 0; i < sky->count; i++) {
+    if (i >= kDioramaBgMaxValidSpans || !ValidSkyboxBand(&sky->bands[i])) {
+      evidence->failed = true;
+      return;
+    }
+    evidence->skybox = true;
+    DioramaProjection active = *projection;
+    active.bg2_skybox.active_band = (int)i;
+    for (int band = 0; band < kDioramaEvidenceBands; band++) {
+      const DioramaEvidenceBounds source = evidence->source[band];
+      const DioramaSkyboxBandProjection *s = &sky->bands[i];
+      const float x0 = fmaxf(source.x0, s->x0), x1 = fminf(source.x1, s->x1);
+      const float y0 = fmaxf(source.y0, s->y0), y1 = fminf(source.y1, s->y1);
+      if (!source.valid || x0 >= x1 || y0 >= y1) continue;
+      for (int corner = 0; corner < 4; corner++) {
+        ArRenderPointF point;
+        if (!Diorama_ProjectCapturedBg2Point(&active, corner & 1 ? x1 : x0,
+                corner & 2 ? y1 : y0, &point, NULL, NULL)) {
+          evidence->failed = true;
+          return;
+        }
+        EvidenceInclude(&evidence->output[2][band], point.x, point.y);
+      }
+    }
+  }
+}

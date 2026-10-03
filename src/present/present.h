@@ -154,6 +154,9 @@ typedef struct FrameSlot {
 
   /* Diorama gate (D14 — Diorama_IsActiveThisFrame() result for this frame). */
   bool diorama_active;
+  /* Screenshot-only opt-in. FrameSlot_Capture clears it; ordinary presents
+   * never collect or format projection evidence. */
+  bool trace_viewport_projection;
   /* Upload policy and exact producer metadata for this captured frame. The
    * request mask snapshots presentation settings; the content mask comes from
    * PPU scanout and marks destinations that received a nontransparent pixel.

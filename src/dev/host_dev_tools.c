@@ -8,6 +8,7 @@
 #include "present/display_geometry.h"
 #include "host/host_ppu_output.h"
 #include "host/host_display.h"
+#include "host/host_viewport_trace.h"
 #include "snesrecomp/game_runtime.h"
 #include "host/host_input.h"
 #include "platform/sdl/dev_tools_readback_sdl.h"
@@ -15,6 +16,7 @@
 #include "snesrecomp/runner.h"
 #include "scene_inspector.h"
 #include "app/settings.h"
+#include "app/session_fatal.h"
 #include "host/host_video.h"
 #include "render/present_hud.h"
 #include "host/host_frame_surfaces.h"
@@ -147,7 +149,39 @@ void HostDevTools_ServiceDioramaDump(void) {
     HostPpuOutput_Rebind();
 }
 
+void HostDevTools_TraceCompositeCapture(
+    const FrameSlot *slot, RenderComparisonView comparison,
+    ArRenderRectI final_viewport, int readback_width, int readback_height) {
+  if (!slot || SessionFatal_Requested() || readback_width <= 0 ||
+      readback_height <= 0 || final_viewport.w <= 0 || final_viewport.h <= 0)
+    return;
+  HostDisplay_TraceCompositeCapture(slot, comparison, final_viewport,
+      readback_width, readback_height);
+  HudPresentationChunk chunks[kHudPresentationChunkCapacity];
+  int count = 0;
+  /* Authentic comparison draws its native-camera image, not relocated chunks.
+   * Diorama's tilted HUD route likewise does not use these flat rectangles. */
+  if (comparison != kRenderComparison_Authentic &&
+      !(slot->inidisp & 0x80) && (slot->inidisp & 15) &&
+      (!slot->diorama_active || slot->diorama_hud_flat))
+    count = PresentHud_BuildChunks(slot, final_viewport, chunks);
+  const unsigned gf = slot->action_effects.game_frame;
+  fprintf(stderr,
+      "[viewport-hud] gf=%u count=%d coords=xywh "
+      "precision=chunk-layout-pre-crt viewport=%d/%d/%d/%d\n",
+      gf, count, final_viewport.x, final_viewport.y,
+      final_viewport.w, final_viewport.h);
+  for (int i = 0; i < count; i++) {
+    const ArRenderRectI rect = chunks[i].output_destination;
+    fprintf(stderr, "[viewport-hud] gf=%u index=%d rect=%d/%d/%d/%d\n",
+        gf, i, rect.x, rect.y, rect.w, rect.h);
+  }
+}
+
 DevToolsCaptureResult HostDevTools_WriteFramebufferPpm(FILE *file, bool require_composite) {
-  const DevToolsContext context = CurrentContext();
+  DevToolsContext context = CurrentContext();
+  /* Scheduled screenshots opt in. Ordinary presents and inspector queries
+   * neither format evidence nor query/capture any extra presentation state. */
+  context.trace_composite_capture = HostDevTools_TraceCompositeCapture;
   return DevTools_WriteFramebufferPpm(file, &context, require_composite);
 }

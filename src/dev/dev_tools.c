@@ -144,20 +144,26 @@ DevToolsCaptureResult DevTools_WriteFramebufferPpm(
     return (DevToolsCaptureResult){0};
 
   FrameSlot frame_slot;
+  ArRenderRectI final_viewport = {0};
+  RenderComparisonView comparison = kRenderComparison_Enhanced;
   bool have_composite = false;
   DevToolsRgb24Capture capture = {0};
   if (context->readback.capture_rgb24 &&
       ArRenderTexture_IsValid(context->hud_bg_texture)) {
     FrameSlot_Capture(&frame_slot, NULL);
+    frame_slot.trace_viewport_projection =
+        context->trace_composite_capture != NULL;
     PresentUpload(&frame_slot);
     /* The same scene -> CRT resolve -> host-UI function used by the live
      * window keeps F2 captures visually identical, including an open menu. */
-    PresentFrame(&frame_slot, kPresentationFrameGenerationPhaseNone,
-                 HostDisplay_FramesPerSecond());
+    comparison = RenderComparison_PresentView();
+    final_viewport = PresentFrame(
+        &frame_slot, kPresentationFrameGenerationPhaseNone,
+        HostDisplay_FramesPerSecond());
     /* A fatal render can unwind with a nonempty viewport. It is neither a
      * composite nor permission to substitute the native framebuffer. */
     if (SessionFatal_Requested()) return (DevToolsCaptureResult){0};
-    have_composite = true;
+    have_composite = final_viewport.w > 0 && final_viewport.h > 0;
   }
   if (have_composite && context->readback.capture_rgb24(
           context->readback.context, &capture) &&
@@ -173,8 +179,12 @@ DevToolsCaptureResult DevTools_WriteFramebufferPpm(
       fwrite(row, 3, (size_t)output_width, file);
     }
     if (capture.release) capture.release(capture.owner);
-    return ferror(file) ? (DevToolsCaptureResult){0} :
-        (DevToolsCaptureResult){output_width, output_height, kDevToolsCapture_Composite};
+    if (ferror(file) || fflush(file) != 0) return (DevToolsCaptureResult){0};
+    if (context->trace_composite_capture)
+      context->trace_composite_capture(
+          &frame_slot, comparison, final_viewport, output_width, output_height);
+    return (DevToolsCaptureResult){
+      output_width, output_height, kDevToolsCapture_Composite};
   }
   if (capture.release) capture.release(capture.owner);
   if (require_composite) return (DevToolsCaptureResult){0};

@@ -2498,17 +2498,27 @@ if(BUILD_TESTING)
         COMMAND actraiser_scheduled_settings_test)
 
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
-        # Link the actual capture function without unrelated inspector/dump
-        # closures. Section GC discards only unused functions; capture,
-        # presenter and readback seams are explicit test stubs.
+        # Link the actual capture function and screenshot trace callback without
+        # unrelated inspector/dump/context closures. Section GC discards only
+        # unused functions; capture, presenter, readback and HUD-layout seams
+        # are explicit test stubs.
         add_executable(actraiser_dev_tools_capture_trace_test
-            tests/dev_tools_capture_trace_test.c src/dev/dev_tools.c)
+            tests/dev_tools_capture_trace_test.c src/dev/dev_tools.c
+            src/dev/host_dev_tools.c)
         target_include_directories(actraiser_dev_tools_capture_trace_test PRIVATE src)
         target_compile_options(actraiser_dev_tools_capture_trace_test PRIVATE
             -ffunction-sections -fdata-sections)
         target_link_options(actraiser_dev_tools_capture_trace_test PRIVATE -Wl,--gc-sections)
         add_test(NAME actraiser_dev_tools_capture_trace COMMAND actraiser_dev_tools_capture_trace_test)
     endif()
+
+    add_executable(actraiser_host_viewport_trace_test
+        tests/host_viewport_trace_test.c
+        src/host/host_viewport_trace.c
+        src/present/presentation_view.c
+        src/app/session_fatal.c)
+    target_include_directories(actraiser_host_viewport_trace_test PRIVATE src)
+    add_test(NAME actraiser_host_viewport_trace COMMAND actraiser_host_viewport_trace_test)
 
     add_executable(actraiser_auto_canvas_test
         tests/auto_canvas_test.c

@@ -7,6 +7,7 @@
 
 #include "dev_tools_readback.h"
 #include "present/present.h"
+#include "present/render_comparison.h"
 #include "snesrecomp/runner.h"
 
 /* Live host-owned resources needed by diagnostic capture and inspector tools.
@@ -14,6 +15,12 @@
  * geometry or the render device changes, so retaining a context is invalid. */
 typedef struct DevToolsContext {
   DevToolsReadbackProvider readback;
+  /* Opt-in capture evidence. Called only after a successful final-composite
+   * PPM write, with the SAME slot drawn for readback and PresentFrame's actual
+   * returned viewport. It must not capture another FrameSlot. */
+  void (*trace_composite_capture)(const FrameSlot *slot,
+      RenderComparisonView comparison, ArRenderRectI final_viewport,
+      int readback_width, int readback_height);
   ArRenderDevice *render_device;
   ArRenderTexture hud_bg_texture;
   ArRenderTexture hud_obj_texture;

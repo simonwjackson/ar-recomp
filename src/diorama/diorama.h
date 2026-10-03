@@ -191,6 +191,34 @@ bool Diorama_ProjectCapturedBg2Point(const DioramaProjection *projection,
                                      ArRenderPointF *point,
                                      float *scale_x, float *scale_y);
 
+/* Capture-only diagnostic storage. Rectangles are x0/y0/x1/y1, not xywh.
+ * Inputs use display-capture coordinates (no OBJ apron). Outputs enclose the
+ * UV-clipped, submitted face triangles, in scene output pixels. No alpha,
+ * occlusion, post-process, fringe, shadow or depth-stack coverage is claimed. */
+typedef struct DioramaEvidenceBounds {
+  bool valid;
+  float x0, y0, x1, y1;
+} DioramaEvidenceBounds;
+enum { kDioramaEvidencePlanes = 4, kDioramaEvidenceBands = 5 };
+typedef struct DioramaCaptureEvidence {
+  /* Order: native, left, right, top, bottom; planes: BG1, BG1-high,
+   * BG2, BG2-high. Extension regions also intersect the executed BG spans. */
+  DioramaEvidenceBounds source[kDioramaEvidenceBands];
+  const DioramaBgValidSpanPlan *spans[kDioramaEvidencePlanes];
+  DioramaEvidenceBounds output[kDioramaEvidencePlanes][kDioramaEvidenceBands];
+  bool mesh[kDioramaEvidencePlanes];
+  bool skybox;
+  bool failed;
+} DioramaCaptureEvidence;
+/* Consumes actual projected mesh vertices, including aperture constraints and
+ * sparse triangle filtering. Capture-only; never solves a camera or mesh. */
+void Diorama_CaptureMeshEvidence(
+    DioramaCaptureEvidence *evidence, const DioramaProjection *projection,
+    int plane, const ArRenderVertex2D *vertices, int vertex_count,
+    const int32_t *indices, int index_count);
+void Diorama_CaptureSkyboxEvidence(
+    DioramaCaptureEvidence *evidence, const DioramaProjection *projection);
+
 typedef struct DioramaSkyboxView {
   ArRenderTexture texture;
   uint64_t revision;
@@ -218,6 +246,8 @@ typedef struct DioramaCapture {
    * that cannot reuse an immutable skybox prefilter result. */
   uint64_t bg2_revision;
   bool bg2_dynamic;
+  /* NULL for all normal draws; synchronous screenshot-local storage only. */
+  DioramaCaptureEvidence *evidence;
 } DioramaCapture;
 
 typedef struct DioramaView {

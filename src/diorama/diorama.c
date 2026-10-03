@@ -2901,6 +2901,16 @@ static PresentationOutcome DrawResolvedDioramaLayer(
   DioramaAttachedMesh attached;
   PrepareDioramaWaterfall(capture, scene, geometry, &layer, &attached,
                           out_projection);
+  /* Snapshot the actual face triangles before compact-texture remapping and
+   * fringe assembly. Only the successful composite caller emits this data. */
+  if (capture->evidence) {
+    Diorama_CaptureMeshEvidence(capture->evidence, out_projection,
+        description->plane, mesh.vertices, mesh.vertex_count,
+        mesh.indices, mesh.index_count);
+    Diorama_CaptureMeshEvidence(capture->evidence, out_projection,
+        description->plane, attached.vertices, attached.vertex_count,
+        attached.indices, attached.index_count);
+  }
   PresentationOutcome outcome =
       DrawDioramaLayerDepth(device, capture, geometry, aperture, &layer);
   if (!PresentationOutcome_IsUsable(outcome))
