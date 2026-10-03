@@ -213,10 +213,18 @@ bool ActionEffectProjection_ClipBounds(
         context->viewport.w <= 0 || context->viewport.h <= 0)
       return false;
     visible = (ActionEffectLocalRect){
-      context->visible_x0 - context->ws_extra - screen_x, -screen_y,
+      context->visible_x0 - context->ws_extra - screen_x,
+      -context->visible_top - screen_y,
       context->visible_x0 + context->visible_width - context->ws_extra - screen_x,
-      context->snes_height - screen_y,
+      context->snes_height - context->visible_top - screen_y,
     };
+    if (context->capture_height > 0) {
+      const ActionEffectLocalRect capture = {
+        visible.x0, -context->ws_extra_top - screen_y,
+        visible.x1, context->capture_height - context->ws_extra_top - screen_y,
+      };
+      IntersectClipRect(&visible, &capture);
+    }
   }
   if (!ClipRectIsValid(&visible)) return false;
   IntersectClipRect(bounds, &visible);
@@ -296,7 +304,8 @@ bool ActionEffectProjection_ProjectPoint(
       (capture_x - (float)context->visible_x0) * context->viewport.w /
           (float)context->visible_width;
   point->y = context->viewport.y +
-      capture_y * context->viewport.h / (float)context->snes_height;
+      (capture_y + context->visible_top) * context->viewport.h /
+          (float)context->snes_height;
   return true;
 }
 
@@ -326,5 +335,6 @@ bool ActionEffectProjection_IntersectsFlatViewport(
   const float visible_x0 = (float)context->visible_x0;
   const float visible_x1 = visible_x0 + (float)context->visible_width;
   return x1 > visible_x0 && x0 < visible_x1 &&
-      y1 > 0.0f && y0 < (float)context->snes_height;
+      y1 > -(float)context->visible_top &&
+      y0 < (float)(context->snes_height - context->visible_top);
 }

@@ -2169,6 +2169,41 @@ static void TestVerticalMarginLayerClip(void) {
 /* The bottom half of the same contract. A layer can reach its finite-world
  * floor before the primary playfield does; rows after that point must become
  * transparent rather than wrapping to the layer's top. */
+/* Auto's BG3 remains screen-space even while BG1/BG2 capture extra world.
+ * Its staged tilemap cells must never wrap into either synthetic band. */
+static void TestVerticalMarginHudClip(void) {
+  enum { top=16, bottom=16, rows=224+top+bottom };
+  Ppu *ppu=ppu_init();
+  CHECK(ppu != NULL);
+  if (!ppu) return;
+  static uint8_t framebuffer[kW*rows*4];
+  static uint32_t capture[kW*rows];
+  ppu_reset(ppu);
+  ppu->inidisp=15;
+  ppu->bgmode=1;
+  ppu->screenEnabled[0]=1u<<kActRaiserPpuLayer_Bg3;
+  ppu->cgram[1]=bgr555(0,31,0);
+  set_solid_2bpp_tile(ppu,0,1,1);
+  ppu->bgXsc[kActRaiserPpuLayer_Bg3]=0x20|3;
+  for (int i=0;i<0x1000;++i) ppu->vram[0x2000+i]=1;
+  PpuSetExtraVerticalSpace(ppu,top,bottom);
+  PpuSetVerticalMarginLayerClip(ppu,kActRaiserPpuLayer_Bg3,0,0);
+  PpuBeginDrawing(ppu,framebuffer,kW*4,0);
+  CHECK(PpuBindOverlaySurface(ppu,kPpuOverlaySource_Bg3,
+      (uint8_t *)capture,kW*4));
+  CHECK(PpuSetOverlayCapture(ppu,kPpuOverlaySource_Bg3,0,-top,kW,rows,
+      kPpuOverlayFlag_RemoveFromGame));
+  ppu_runLine(ppu,0);
+  for (int line=1-top;line<=0;++line) ppu_runMarginLine(ppu,line);
+  for (int line=1;line<=224;++line) ppu_runLine(ppu,line);
+  for (int line=225;line<=224+bottom;++line) ppu_runMarginLine(ppu,line);
+  for (int y=0;y<rows;++y) {
+    if (y<top || y>=top+224) CHECK((capture[y*kW]&0xffffffu)==0);
+    else CHECK((capture[y*kW]&0xffffffu)!=0);
+  }
+  ppu_free(ppu);
+}
+
 /* An unbound/off world provider falls back to the native streaming ring.
  * X Clamp alone still reads that ring in synthetic Y rows. Zero Y budgets
  * must clear those rows without removing the requested canvas or native band. */
@@ -3014,6 +3049,7 @@ int main(void) {
   TestVerticalMarginLayerClip();
   TestVerticalMarginBottomLayerClip();
   TestUnboundWorldVerticalFallback();
+  TestVerticalMarginHudClip();
   TestVerticalMarginExactObj();
   TestLayerPresentationExtents();
   TestMovingEdgePoliciesInVerticalMargins();

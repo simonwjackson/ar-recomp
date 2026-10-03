@@ -384,8 +384,8 @@ void ActRaiser_PrepareSceneMasks(uint8_t map_group, uint8_t map_number) {
                                   g_action_bg1_mask_pixels, (size_t)width * 4,
                                   kHostDisplayFramebufferHeight)) {
         ActRaiser_SetPpuOverlayCapture(
-            SR_PPU_OVERLAY_BG1, -g_ws_extra, 0, width,
-            kActRaiserAuthenticHeight,
+            SR_PPU_OVERLAY_BG1, -g_ws_extra, -g_ws_extra_top, width,
+            kActRaiserAuthenticHeight + g_ws_extra_top + g_ws_extra_bottom,
             /* These rooms use main-screen BG1. Reuse packed winners after
              * HUD extraction; subscreen rooms retain their owning-screen policy. */
             ((map_group == kActRaiserMapGroup_Fillmore && map_number == 3) ||
@@ -405,8 +405,9 @@ void ActRaiser_PrepareSceneMasks(uint8_t map_group, uint8_t map_number) {
       if (ActRaiser_BindPpuOutput(SR_PPU_OUTPUT_OVERLAY, SR_PPU_OVERLAY_BG2, 0u,
                                   g_action_bg2_mask_pixels, (size_t)width * 4,
                                   kHostDisplayFramebufferHeight)) {
-        ActRaiser_SetPpuOverlayCapture(SR_PPU_OVERLAY_BG2, -g_ws_extra, 0,
-                                       width, kActRaiserAuthenticHeight,
+        ActRaiser_SetPpuOverlayCapture(SR_PPU_OVERLAY_BG2, -g_ws_extra, -g_ws_extra_top,
+                                       width, kActRaiserAuthenticHeight +
+                                           g_ws_extra_top + g_ws_extra_bottom,
                                        SR_PPU_OVERLAY_MARK_MAIN_SCREEN_WINNER);
       }
     }
