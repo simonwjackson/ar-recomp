@@ -20,6 +20,7 @@
 #include "present/present.h"
 #include "present/presentation_frame_generation.h"
 #include "app/run_dir.h"
+#include "app/session_fatal.h"
 #include "snesrecomp/runner.h"
 #include "scene_asset_dump.h"
 #include "scene_inspector.h"
@@ -153,6 +154,9 @@ DevToolsCaptureResult DevTools_WriteFramebufferPpm(
      * window keeps F2 captures visually identical, including an open menu. */
     PresentFrame(&frame_slot, kPresentationFrameGenerationPhaseNone,
                  HostDisplay_FramesPerSecond());
+    /* A fatal render can unwind with a nonempty viewport. It is neither a
+     * composite nor permission to substitute the native framebuffer. */
+    if (SessionFatal_Requested()) return (DevToolsCaptureResult){0};
     have_composite = true;
   }
   if (have_composite && context->readback.capture_rgb24(

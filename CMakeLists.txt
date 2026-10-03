@@ -2497,6 +2497,19 @@ if(BUILD_TESTING)
     add_test(NAME actraiser_scheduled_settings
         COMMAND actraiser_scheduled_settings_test)
 
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        # Link the actual capture function without unrelated inspector/dump
+        # closures. Section GC discards only unused functions; capture,
+        # presenter and readback seams are explicit test stubs.
+        add_executable(actraiser_dev_tools_capture_trace_test
+            tests/dev_tools_capture_trace_test.c src/dev/dev_tools.c)
+        target_include_directories(actraiser_dev_tools_capture_trace_test PRIVATE src)
+        target_compile_options(actraiser_dev_tools_capture_trace_test PRIVATE
+            -ffunction-sections -fdata-sections)
+        target_link_options(actraiser_dev_tools_capture_trace_test PRIVATE -Wl,--gc-sections)
+        add_test(NAME actraiser_dev_tools_capture_trace COMMAND actraiser_dev_tools_capture_trace_test)
+    endif()
+
     # SDL3 render-pipeline regression guard: presents a known framebuffer
     # through the same texture/FRect/logical-presentation path main.c uses and
     # asserts the read-back frame is not black (the prior SDL3 attempt's bug).
