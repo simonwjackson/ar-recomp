@@ -2772,6 +2772,7 @@ static void TestCapturedPaddingReachesBudget(void) {
     CHECK((row[1] & 0xffffffu) != 0);
     CHECK((row[kCaptureWidth - 2] & 0xffffffu) != 0);
   }
+  ppu_free(ppu);
 }
 
 static void TestAuthenticComparisonSurface(void) {
